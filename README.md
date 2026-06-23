@@ -11,6 +11,7 @@
   <a href="https://www.npmjs.com/package/@dappql/react"><img src="https://img.shields.io/npm/v/@dappql/react.svg?label=%40dappql%2Freact" alt="npm @dappql/react" /></a>
   <a href="https://www.npmjs.com/package/dappql"><img src="https://img.shields.io/npm/v/dappql.svg?label=dappql%20cli" alt="npm dappql" /></a>
   <img src="https://img.shields.io/npm/l/@dappql/react.svg" alt="license" />
+[![SafeSkill 85/100](https://img.shields.io/badge/SafeSkill-85%2F100_Passes%20with%20Notes-yellow)](https://safeskill.dev/scan/dappql-core)
 </p>
 
 <p align="center">
