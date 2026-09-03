@@ -110,7 +110,7 @@ export function useMutation<M extends string, Args extends readonly any[]>(
 } {
   const { addressResolver, onMutationUpdate, simulateMutations } = useDappQL()
 
-  const { chain, address: account } = useAccount()
+  const { chain, address: account, connector } = useAccount()
 
   const tx = useWriteContract()
   const client = usePublicClient()
@@ -145,6 +145,18 @@ export function useMutation<M extends string, Args extends readonly any[]>(
     (...args: NonNullable<Args>) => {
       const now = Date.now()
       const id = mutationInfo.address + mutationInfo.functionName + now.toString()
+
+      // Captured when the caller asks to send, and used for the write below.
+      //
+      // `writeContract` resolves the active connection inside its own mutation
+      // function, which runs after a yield — and after `simulate` below, which
+      // is awaited. A wallet event landing in either gap would otherwise sign
+      // with whoever is connected then, against arguments built and simulated
+      // for whoever was connected when the caller decided to send. Binding both
+      // makes wagmi fail that write instead of retargeting it.
+      const boundAccount = account
+      const boundConnector = connector
+
       if (!account || !chain?.id) {
         const error = !account ? 'No account connected' : 'Invalid chain'
 
@@ -166,6 +178,8 @@ export function useMutation<M extends string, Args extends readonly any[]>(
             address,
             chainId: chain?.id,
             args,
+            account: boundAccount,
+            connector: boundConnector,
           },
           {
             onSettled(data, error) {
@@ -206,7 +220,7 @@ export function useMutation<M extends string, Args extends readonly any[]>(
         sendTx()
       }
     },
-    [address, tx, config, account, chain?.id, options?.simulate, simulateMutations, client, simulate],
+    [address, tx, config, account, connector, chain?.id, options?.simulate, simulateMutations, client, simulate],
   )
 
   const confirmation = useMutationConfirmation(tx.data)
