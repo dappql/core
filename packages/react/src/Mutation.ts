@@ -171,30 +171,48 @@ export function useMutation<M extends string, Args extends readonly any[]>(
       }
 
       const sendTx = () => {
-        tx.writeContract(
-          {
-            abi: config.getAbi(),
-            functionName: config.functionName,
-            address,
-            chainId: chain?.id,
-            args,
-            account: boundAccount,
-            connector: boundConnector,
-          },
-          {
-            onSettled(data, error) {
-              const status: MutationInfo['status'] = error ? 'error' : 'signed'
-              onMutationUpdate?.({
-                ...mutationInfo,
-                id,
-                args,
-                error: error ? new Error(error.message) : undefined,
-                status,
-                txHash: data,
-              })
-            },
-          },
-        )
+        // `writeContractAsync`, not `writeContract` with an `onSettled`.
+        //
+        // TanStack invokes per-call callbacks only while the observer still has
+        // listeners (`mutationObserver.ts`), so unmounting the component,
+        // calling `reset`, or issuing a superseding mutation while the wallet
+        // prompt is open silently drops `onSettled`. The transaction still
+        // broadcasts — the user signed it — but `signed` never fires, so the
+        // hash is never persisted, the global receipt watcher never starts, and
+        // the `submitted` notification below is left stranded with no terminal
+        // update. Closing a modal after approving is enough to reach it.
+        //
+        // A promise continuation is not listener-gated, so these run whatever
+        // the component does next. `.catch` is mandatory rather than tidy:
+        // `writeContractAsync` rejects on a user-rejected prompt, and without it
+        // that becomes an unhandled rejection.
+        tx.writeContractAsync({
+          abi: config.getAbi(),
+          functionName: config.functionName,
+          address,
+          chainId: chain?.id,
+          args,
+          account: boundAccount,
+          connector: boundConnector,
+        })
+          .then((txHash) => {
+            onMutationUpdate?.({
+              ...mutationInfo,
+              id,
+              args,
+              status: 'signed',
+              txHash,
+            })
+          })
+          .catch((error) => {
+            onMutationUpdate?.({
+              ...mutationInfo,
+              id,
+              args,
+              error: error instanceof Error ? error : new Error(String(error)),
+              status: 'error',
+            })
+          })
 
         onMutationUpdate?.({
           ...mutationInfo,
