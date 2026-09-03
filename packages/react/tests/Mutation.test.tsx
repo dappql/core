@@ -240,6 +240,9 @@ describe('useMutation', () => {
         expect.objectContaining({ status: 'signed', txHash: '0xdeadbeef' }),
       )
     })
+
+    expect(mockOnMutationUpdate.mock.calls.filter(([u]) => u.status === 'submitted')).toHaveLength(1)
+    expect(mockOnMutationUpdate.mock.calls.filter(([u]) => u.status === 'signed')).toHaveLength(1)
   })
 
   it('reports the signed hash even after reset', async () => {
@@ -278,6 +281,54 @@ describe('useMutation', () => {
         expect.objectContaining({ status: 'signed', txHash: '0xafterreset' }),
       )
     })
+
+    // Exactly once each: a duplicate `signed` would start the global watcher
+    // twice and persist the same hash twice.
+    expect(mockOnMutationUpdate.mock.calls.filter(([u]) => u.status === 'submitted')).toHaveLength(1)
+    expect(mockOnMutationUpdate.mock.calls.filter(([u]) => u.status === 'signed')).toHaveLength(1)
+  })
+
+  it('reports a rejection after reset without leaking an unhandled rejection', async () => {
+    const mockOnMutationUpdate = vi.fn()
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+
+    let rejectWrite: (error: Error) => void = () => {}
+    ;(useWriteContract as any).mockReturnValue({
+      writeContractAsync: vi.fn(
+        () =>
+          new Promise<string>((_resolve, reject) => {
+            rejectWrite = reject
+          }),
+      ),
+      data: null,
+      isPending: false,
+    })
+
+    const { result } = renderHook(() => useMutation(MUTATION_CONFIG, 'Set Value'), {
+      wrapper: ({ children }) => <DappQLProvider onMutationUpdate={mockOnMutationUpdate}>{children}</DappQLProvider>,
+    })
+
+    act(() => {
+      result.current.send(123n)
+    })
+    act(() => {
+      result.current.reset()
+    })
+
+    // `writeContractAsync` rejects where `writeContract` swallowed the error
+    // into `onSettled`, so the `.catch` is load-bearing rather than tidy.
+    await act(async () => {
+      rejectWrite(new Error('User rejected the request'))
+    })
+
+    await waitFor(() => {
+      expect(mockOnMutationUpdate.mock.calls.filter(([u]) => u.status === 'error')).toHaveLength(1)
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(unhandled).not.toHaveBeenCalled()
+    process.off('unhandledRejection', unhandled)
   })
 
   it('reports both hashes when a second send supersedes the first', async () => {
