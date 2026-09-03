@@ -242,6 +242,87 @@ describe('useMutation', () => {
     })
   })
 
+  it('reports the signed hash even after reset', async () => {
+    const mockOnMutationUpdate = vi.fn()
+    let resolveWrite: (hash: string) => void = () => {}
+    ;(useWriteContract as any).mockReturnValue({
+      writeContractAsync: vi.fn(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveWrite = resolve
+          }),
+      ),
+      data: null,
+      isPending: false,
+    })
+
+    const { result } = renderHook(() => useMutation(MUTATION_CONFIG, 'Set Value'), {
+      wrapper: ({ children }) => <DappQLProvider onMutationUpdate={mockOnMutationUpdate}>{children}</DappQLProvider>,
+    })
+
+    act(() => {
+      result.current.send(123n)
+    })
+
+    // Resetting clears local state, but the wallet prompt it opened is still up.
+    act(() => {
+      result.current.reset()
+    })
+
+    await act(async () => {
+      resolveWrite('0xafterreset')
+    })
+
+    await waitFor(() => {
+      expect(mockOnMutationUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'signed', txHash: '0xafterreset' }),
+      )
+    })
+  })
+
+  it('reports both hashes when a second send supersedes the first', async () => {
+    const mockOnMutationUpdate = vi.fn()
+    const resolvers: Array<(hash: string) => void> = []
+    ;(useWriteContract as any).mockReturnValue({
+      writeContractAsync: vi.fn(
+        () =>
+          new Promise<string>((resolve) => {
+            resolvers.push(resolve)
+          }),
+      ),
+      data: null,
+      isPending: false,
+    })
+
+    const { result } = renderHook(() => useMutation(MUTATION_CONFIG, 'Set Value'), {
+      wrapper: ({ children }) => <DappQLProvider onMutationUpdate={mockOnMutationUpdate}>{children}</DappQLProvider>,
+    })
+
+    act(() => {
+      result.current.send(1n)
+    })
+    act(() => {
+      result.current.send(2n)
+    })
+    expect(resolvers).toHaveLength(2)
+
+    // Both were signed. A superseded transaction is still a real transaction,
+    // and dropping its hash loses it entirely.
+    await act(async () => {
+      resolvers[0]('0xfirst')
+      resolvers[1]('0xsecond')
+    })
+
+    await waitFor(() => {
+      expect(mockOnMutationUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'signed', txHash: '0xfirst' }),
+      )
+      expect(mockOnMutationUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'signed', txHash: '0xsecond' }),
+      )
+    })
+  })
+
   it('handles errors when no account is connected', () => {
     const mockOnMutationUpdate = vi.fn()
     ;(useAccount as any).mockReturnValue({
