@@ -1,6 +1,6 @@
 {
   "name": "@dappql/react",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Streamlined smart contract data fetching library for React dApps with TypeScript support",
   "author": "DappQL Team",
   "type": "module",
