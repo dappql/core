@@ -96,6 +96,8 @@ describe('useMutation', () => {
         address: MUTATION_CONFIG.deployAddress,
         args: [123n],
         chainId: 1,
+        account: '0x456',
+        connector: undefined,
       },
       expect.any(Object),
     )
@@ -145,6 +147,58 @@ describe('useMutation', () => {
     await waitFor(() => {
       expect(mockWriteContract).toHaveBeenCalled()
     })
+  })
+
+  it('signs with the account and connector the send was authorized for', async () => {
+    // `writeContract` resolves the active connection inside its own mutation
+    // function, and `simulate` is awaited before it. A wallet event landing in
+    // either gap must not retarget a transaction whose arguments were built and
+    // simulated for the previous account.
+    const connectorA = { uid: 'connector-a' }
+    const connectorB = { uid: 'connector-b' }
+    ;(useAccount as any).mockReturnValue({ address: '0xAAA', chain: { id: 1 }, connector: connectorA })
+
+    let resolveSimulation: (value: unknown) => void = () => {}
+    const mockSimulateContract = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSimulation = resolve
+        }),
+    )
+    const mockWriteContract = vi.fn()
+    ;(usePublicClient as any).mockReturnValue({ simulateContract: mockSimulateContract })
+    ;(useWriteContract as any).mockReturnValue({
+      writeContract: mockWriteContract,
+      data: null,
+      isPending: false,
+    })
+
+    const { result, rerender } = renderHook(() => useMutation(MUTATION_CONFIG, { simulate: true }), {
+      wrapper: ({ children }) => <DappQLProvider>{children}</DappQLProvider>,
+    })
+
+    act(() => {
+      result.current.send(123n)
+    })
+
+    // The wallet changes while the simulation is still pending.
+    ;(useAccount as any).mockReturnValue({ address: '0xBBB', chain: { id: 1 }, connector: connectorB })
+    rerender()
+
+    await act(async () => {
+      resolveSimulation({})
+    })
+
+    await waitFor(() => {
+      expect(mockWriteContract).toHaveBeenCalled()
+    })
+
+    // Bound to the account and connector that authorized the send, so wagmi
+    // fails the write rather than signing it with the wallet that replaced it.
+    expect(mockWriteContract).toHaveBeenCalledWith(
+      expect.objectContaining({ account: '0xAAA', connector: connectorA }),
+      expect.any(Object),
+    )
   })
 
   it('handles errors when no account is connected', () => {
