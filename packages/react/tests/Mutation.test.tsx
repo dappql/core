@@ -51,7 +51,7 @@ describe('useMutation', () => {
       data: null,
     })
     ;(useWriteContract as any).mockReturnValue({
-      writeContract: vi.fn(),
+      writeContractAsync: vi.fn().mockResolvedValue('0xhash'),
       data: null,
       isPending: false,
     })
@@ -71,10 +71,10 @@ describe('useMutation', () => {
   })
 
   it('handles transaction submission', async () => {
-    const mockWriteContract = vi.fn()
+    const mockWriteContract = vi.fn().mockResolvedValue('0xhash')
     const mockOnMutationUpdate = vi.fn()
     ;(useWriteContract as any).mockReturnValue({
-      writeContract: mockWriteContract,
+      writeContractAsync: mockWriteContract,
       data: null,
       isPending: false,
     })
@@ -90,7 +90,7 @@ describe('useMutation', () => {
 
     // Verify writeContract was called with correct params
     expect(mockWriteContract).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         abi: MUTATION_CONFIG.getAbi(),
         functionName: MUTATION_CONFIG.functionName,
         address: MUTATION_CONFIG.deployAddress,
@@ -98,8 +98,7 @@ describe('useMutation', () => {
         chainId: 1,
         account: '0x456',
         connector: undefined,
-      },
-      expect.any(Object),
+      }),
     )
 
     // Verify onMutationUpdate was called with submitted status
@@ -115,12 +114,12 @@ describe('useMutation', () => {
 
   it('handles simulation when enabled', async () => {
     const mockSimulateContract = vi.fn().mockResolvedValue({})
-    const mockWriteContract = vi.fn()
+    const mockWriteContract = vi.fn().mockResolvedValue('0xhash')
     ;(usePublicClient as any).mockReturnValue({
       simulateContract: mockSimulateContract,
     })
     ;(useWriteContract as any).mockReturnValue({
-      writeContract: mockWriteContract,
+      writeContractAsync: mockWriteContract,
       data: null,
       isPending: false,
     })
@@ -165,10 +164,10 @@ describe('useMutation', () => {
           resolveSimulation = resolve
         }),
     )
-    const mockWriteContract = vi.fn()
+    const mockWriteContract = vi.fn().mockResolvedValue('0xhash')
     ;(usePublicClient as any).mockReturnValue({ simulateContract: mockSimulateContract })
     ;(useWriteContract as any).mockReturnValue({
-      writeContract: mockWriteContract,
+      writeContractAsync: mockWriteContract,
       data: null,
       isPending: false,
     })
@@ -195,10 +194,52 @@ describe('useMutation', () => {
 
     // Bound to the account and connector that authorized the send, so wagmi
     // fails the write rather than signing it with the wallet that replaced it.
-    expect(mockWriteContract).toHaveBeenCalledWith(
-      expect.objectContaining({ account: '0xAAA', connector: connectorA }),
-      expect.any(Object),
+    expect(mockWriteContract).toHaveBeenCalledWith(expect.objectContaining({ account: '0xAAA', connector: connectorA }))
+  })
+
+  it('reports the signed hash even if the component unmounts first', async () => {
+    // TanStack runs per-call mutation callbacks only while the observer still
+    // has listeners, so an `onSettled` passed to `writeContract` is dropped on
+    // unmount, reset, or a superseding mutation. The transaction still
+    // broadcasts — the user already approved it — and without this the hash is
+    // never persisted, the receipt watcher never starts, and the `submitted`
+    // notification is left with no terminal update.
+    const mockOnMutationUpdate = vi.fn()
+    let resolveWrite: (hash: string) => void = () => {}
+    const mockWriteContractAsync = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveWrite = resolve
+        }),
     )
+    ;(useWriteContract as any).mockReturnValue({
+      writeContractAsync: mockWriteContractAsync,
+      data: null,
+      isPending: false,
+    })
+
+    const { result, unmount } = renderHook(() => useMutation(MUTATION_CONFIG, 'Set Value'), {
+      wrapper: ({ children }) => <DappQLProvider onMutationUpdate={mockOnMutationUpdate}>{children}</DappQLProvider>,
+    })
+
+    act(() => {
+      result.current.send(123n)
+    })
+    expect(mockWriteContractAsync).toHaveBeenCalled()
+
+    // The user closes the dialog while the wallet prompt is still open.
+    unmount()
+
+    // ...and then approves it.
+    await act(async () => {
+      resolveWrite('0xdeadbeef')
+    })
+
+    await waitFor(() => {
+      expect(mockOnMutationUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'signed', txHash: '0xdeadbeef' }),
+      )
+    })
   })
 
   it('handles errors when no account is connected', () => {
@@ -228,9 +269,9 @@ describe('useMutation', () => {
 
   it('uses addressResolver when available', () => {
     const mockAddressResolver = vi.fn().mockReturnValue('0x789')
-    const mockWriteContract = vi.fn()
+    const mockWriteContract = vi.fn().mockResolvedValue('0xhash')
     ;(useWriteContract as any).mockReturnValue({
-      writeContract: mockWriteContract,
+      writeContractAsync: mockWriteContract,
       data: null,
       isPending: false,
     })
@@ -249,7 +290,6 @@ describe('useMutation', () => {
       expect.objectContaining({
         address: '0x789',
       }),
-      expect.any(Object),
     )
   })
 
@@ -259,9 +299,7 @@ describe('useMutation', () => {
 
     // Mock write contract to return a tx hash
     ;(useWriteContract as any).mockReturnValue({
-      writeContract: vi.fn((_, { onSettled }) => {
-        onSettled(mockTxHash, null)
-      }),
+      writeContractAsync: vi.fn().mockResolvedValue(mockTxHash),
       data: mockTxHash,
       isPending: false,
     })
@@ -304,15 +342,13 @@ describe('useMutation', () => {
     expect(result.current.isLoading).toBe(false)
   })
 
-  it('handles transaction errors in onSettled', async () => {
+  it('reports an error when the wallet rejects', async () => {
     const mockOnMutationUpdate = vi.fn()
     const mockError = new Error('Transaction failed')
 
     // Mock write contract to return an error
     ;(useWriteContract as any).mockReturnValue({
-      writeContract: vi.fn((_, { onSettled }) => {
-        onSettled(null, mockError)
-      }),
+      writeContractAsync: vi.fn().mockRejectedValue(mockError),
       data: null,
       isPending: false,
     })
@@ -365,16 +401,16 @@ describe('useMutation', () => {
     })
 
     // Verify writeContract was not called after simulation failure
-    expect(useWriteContract().writeContract).not.toHaveBeenCalled()
+    expect(useWriteContract().writeContractAsync).not.toHaveBeenCalled()
   })
 
   it('uses address from mutation options when provided', () => {
-    const mockWriteContract = vi.fn()
+    const mockWriteContract = vi.fn().mockResolvedValue('0xhash')
     const customAddress = '0xabc123' as `0x${string}`
     const mockAddressResolver = vi.fn().mockReturnValue('0x789')
 
     ;(useWriteContract as any).mockReturnValue({
-      writeContract: mockWriteContract,
+      writeContractAsync: mockWriteContract,
       data: null,
       isPending: false,
     })
@@ -400,7 +436,6 @@ describe('useMutation', () => {
       expect.objectContaining({
         address: customAddress,
       }),
-      expect.any(Object),
     )
 
     // Verify address resolver was not called
